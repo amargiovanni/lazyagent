@@ -1,0 +1,36 @@
+version: 2
+
+builds:
+  - main: .
+    binary: lazyagent
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats:
+      - tar.gz
+    files:
+      - README.md
+      - LICENSE
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+homebrew_casks:
+  - repository:
+      owner: illegalstudio
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/illegalstudio/lazyagent
+    description: A lazy TUI for monitoring Claude Code agent sessions
