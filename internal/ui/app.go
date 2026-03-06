@@ -401,12 +401,24 @@ func (m Model) renderTitleBar() string {
 		Background(colorPrimary).Foreground(colorSubtext).
 		Padding(0, 1).
 		Render(fmt.Sprintf("%d sessions [last %dm]", len(vis), m.windowMinutes))
+
+	parts := []string{left, count}
+
+	if m.activityFilter != "" {
+		filterBadge := lipgloss.NewStyle().
+			Background(colorPrimary).Foreground(colorWarning).Bold(true).
+			Padding(0, 1).
+			Render("▸ " + string(m.activityFilter))
+		parts = append(parts, filterBadge)
+	}
+
 	refresh := lipgloss.NewStyle().
 		Background(colorPrimary).Foreground(colorMuted).
 		Padding(0, 1).
 		Render("updated " + formatDuration(time.Since(m.lastRefresh)))
+	parts = append(parts, refresh)
 
-	bar := lipgloss.JoinHorizontal(lipgloss.Top, left, count, refresh)
+	bar := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 	return lipgloss.NewStyle().
 		Background(colorPrimary).
 		Width(m.width).
@@ -668,10 +680,7 @@ func (m Model) renderHelp() string {
 		return helpStyle.Width(m.width).Render(strings.Join(parts, "  "))
 	}
 
-	filterLabel := "all"
-	if m.activityFilter != "" {
-		filterLabel = string(m.activityFilter)
-	}
+
 
 	if m.focus == 0 {
 		parts = []string{
@@ -679,7 +688,7 @@ func (m Model) renderHelp() string {
 			helpKeyStyle.Render("j/↓") + helpStyle.Render(" next"),
 			helpKeyStyle.Render("tab") + helpStyle.Render(" detail"),
 			helpKeyStyle.Render("+/-") + helpStyle.Render(" mins"),
-			helpKeyStyle.Render("f") + helpStyle.Render(" filter:" + filterLabel),
+			helpKeyStyle.Render("f") + helpStyle.Render(" filter"),
 			helpKeyStyle.Render("/") + helpStyle.Render(" search"),
 			helpKeyStyle.Render("r") + helpStyle.Render(" refresh"),
 			helpKeyStyle.Render("q") + helpStyle.Render(" quit"),
@@ -690,7 +699,7 @@ func (m Model) renderHelp() string {
 			helpKeyStyle.Render("j/↓") + helpStyle.Render(" scroll dn"),
 			helpKeyStyle.Render("tab") + helpStyle.Render(" list"),
 			helpKeyStyle.Render("+/-") + helpStyle.Render(" mins"),
-			helpKeyStyle.Render("f") + helpStyle.Render(" filter:" + filterLabel),
+			helpKeyStyle.Render("f") + helpStyle.Render(" filter"),
 			helpKeyStyle.Render("/") + helpStyle.Render(" search"),
 			helpKeyStyle.Render("r") + helpStyle.Render(" refresh"),
 			helpKeyStyle.Render("q") + helpStyle.Render(" quit"),
