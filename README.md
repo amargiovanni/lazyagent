@@ -2,7 +2,7 @@
 
 A terminal UI for monitoring all running [Claude Code](https://claude.ai/code) instances on your machine — inspired by [lazygit](https://github.com/jesseduffield/lazygit), [lazyworktree](https://github.com/chmouel/lazyworktree) and [pixel-agents](https://github.com/pablodelucca/pixel-agents).
 
-![lazyagent](assets/screenshot.png)
+![lazyagent](assets/screenshot.jpg)
 
 ## How it works
 
