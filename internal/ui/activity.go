@@ -14,6 +14,12 @@ const ActivityTimeout = 30 * time.Second
 // WaitingTimeout is how long "waiting" stays visible before falling back to idle.
 const WaitingTimeout = 2 * time.Minute
 
+// WaitingGrace is the minimum time StatusWaitingForUser must be stable before
+// displaying ActivityWaiting. Claude sometimes writes a text-only assistant message
+// before immediately continuing with a tool_use message (~2s later), which would
+// otherwise cause a brief false "waiting" flash.
+const WaitingGrace = 10 * time.Second
+
 // ActivityKind is the human-readable label shown in the session list.
 type ActivityKind string
 
@@ -115,18 +121,37 @@ func toolActivity(tool string) ActivityKind {
 }
 
 // updateActivities resolves and stores the current activity for each session.
-// The timeout logic lives in resolveActivity (via RecentTools timestamps),
-// so this is a straightforward map update.
+// Applies a grace period before showing ActivityWaiting to avoid false positives
+// when Claude writes an intermediate text message before continuing with a tool.
 func (m *Model) updateActivities(now time.Time) {
 	if m.activities == nil {
 		m.activities = make(map[string]*activityEntry)
+	}
+	if m.waitingSince == nil {
+		m.waitingSince = make(map[string]time.Time)
 	}
 	for _, s := range m.sessions {
 		id := s.SessionID
 		if id == "" {
 			continue
 		}
-		m.activities[id] = &activityEntry{kind: resolveActivity(s, now), lastSeen: now}
+		activity := resolveActivity(s, now)
+
+		if activity == ActivityWaiting {
+			// Start the grace period timer on first observation.
+			if _, seen := m.waitingSince[id]; !seen {
+				m.waitingSince[id] = now
+			}
+			// Only show "waiting" once the state has been stable for WaitingGrace.
+			if now.Sub(m.waitingSince[id]) < WaitingGrace {
+				continue // keep previous activity during grace period
+			}
+		} else {
+			// Left the waiting state — reset grace period timer.
+			delete(m.waitingSince, id)
+		}
+
+		m.activities[id] = &activityEntry{kind: activity, lastSeen: now}
 	}
 }
 

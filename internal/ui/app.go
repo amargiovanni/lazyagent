@@ -12,8 +12,11 @@ import (
 	"github.com/nahime0/lazyclaude/internal/claude"
 )
 
-// tickMsg is sent on each refresh tick.
+// tickMsg triggers a full session reload (fallback when file watcher misses events).
 type tickMsg time.Time
+
+// renderTickMsg triggers a re-render to keep "X ago" timestamps live — no I/O.
+type renderTickMsg time.Time
 
 // sessionsMsg carries newly loaded sessions.
 type sessionsMsg struct {
@@ -39,6 +42,13 @@ type Model struct {
 
 	// Sticky activity states, keyed by session ID
 	activities map[string]*activityEntry
+
+	// FSEvents-based watcher for ~/.claude/projects
+	watcher *projectWatcher
+
+	// waitingSince tracks when each session first entered StatusWaitingForUser.
+	// Used to apply a grace period before displaying ActivityWaiting.
+	waitingSince map[string]time.Time
 }
 
 type keyMap struct {
@@ -62,20 +72,34 @@ var keys = keyMap{
 }
 
 func NewModel() Model {
+	w, _ := newProjectWatcher()
 	return Model{
 		loading:       true,
 		activities:    make(map[string]*activityEntry),
 		windowMinutes: 30,
+		watcher:       w,
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(makeLoadCmd(), tickCmd())
+	cmds := []tea.Cmd{makeLoadCmd(), tickCmd(), renderTickCmd()}
+	if m.watcher != nil {
+		cmds = append(cmds, watchCmd(m.watcher.Events))
+	}
+	return tea.Batch(cmds...)
 }
 
 func tickCmd() tea.Cmd {
-	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+	// Fallback tick in case the file watcher misses an event.
+	return tea.Tick(30*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
+	})
+}
+
+func renderTickCmd() tea.Cmd {
+	// Fast tick just to keep "X ago" timestamps live — no I/O.
+	return tea.Tick(1*time.Second, func(t time.Time) tea.Msg {
+		return renderTickMsg(t)
 	})
 }
 
@@ -106,6 +130,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+
+	case fileWatchMsg:
+		// A JSONL file changed — reload immediately and re-arm the watcher.
+		return m, tea.Batch(makeLoadCmd(), watchCmd(m.watcher.Events))
+
+	case renderTickMsg:
+		// Re-render only — no I/O.
+		return m, renderTickCmd()
 
 	case tickMsg:
 		return m, tea.Batch(makeLoadCmd(), tickCmd())
