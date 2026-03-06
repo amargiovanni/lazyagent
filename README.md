@@ -1,5 +1,8 @@
 # lazyagent
 
+![GitHub Downloads](https://img.shields.io/github/downloads/illegalstudio/lazyagent/total)
+![License: MIT](https://img.shields.io/badge/license-MIT-blue)
+
 A terminal UI for monitoring all running [Claude Code](https://claude.ai/code) instances on your machine — inspired by [lazygit](https://github.com/jesseduffield/lazygit), [lazyworktree](https://github.com/chmouel/lazyworktree) and [pixel-agents](https://github.com/pablodelucca/pixel-agents).
 
 ![lazyagent](assets/screenshot.jpg)
