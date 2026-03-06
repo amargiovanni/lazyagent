@@ -5,52 +5,55 @@ A terminal UI for monitoring all running [Claude Code](https://claude.ai/code) i
 ```
 ╭─────────────────────────────╮╭──────────────────────────────────────────╮
 │ PROJECT          STATUS     ││ /Volumes/Crucio/Developer/myapp          │
-│ ────────────────────────     ││ ⚙  tool  → Bash                          │
-│ myapp            ⚙  tool   ││                                           │
-│ myapp/worktree   ⏳ waiting ││ PID                 84231                 │
-│ other-project    💤 idle    ││ Session ID          0279269c...           │
-│                             ││ Version             2.1.70                │
+│ ────────────────────────     ││ ● running                                │
+│ myapp            running    ││                                           │
+│ myapp/worktree   waiting    ││ Session ID          0279269c…b3cb         │
+│ other-project    idle       ││ Version             2.1.70                │
 │                             ││ Model               claude-sonnet-4-6     │
 │                             ││ Git Branch          feat/new-api          │
 │                             ││ Worktree            no                    │
-│                             ││ Permissions         ⚠ dangerously-skip... │
-│                             ││ Messages            42 total (18u, 24a)   │
-│                             ││ Last activity       3s ago                │
-│                             ││                                           │
+│                             ││ Messages            42  (18 user, 24 ai)  │
+│                             ││ Last operation      Bash  (3s ago)        │
+│                             ││ Last file           src/main.go (12s ago) │
+│                             ││ ─────────────────────────────────         │
+│                             ││ Conversation                              │
+│                             ││   AI    Fixed the parsing bug…            │
+│                             ││   User  Can you also fix the tests?       │
+│                             ││ ─────────────────────────────────         │
 │                             ││ Recent Tools                              │
-│                             ││   ⚙  Bash         5s ago                 │
-│                             ││   ⚙  Read         12s ago                │
-│                             ││   ⚙  Write        30s ago                │
+│                             ││   Bash         5s ago                     │
+│                             ││   Read         12s ago                    │
+│                             ││   Write        30s ago                    │
 ╰─────────────────────────────╯╰──────────────────────────────────────────╯
- ↑/k up  ↓/j down  tab switch panel  r refresh  q quit
+ k/↑ prev  j/↓ next  tab detail  +/- mins  f filter  / search  r refresh  q quit
 ```
 
 ## How it works
 
 lazyclaude watches Claude Code's JSONL transcript files (`~/.claude/projects/*/`) to determine what each session is doing. No modifications to Claude Code are needed — it's purely observational.
 
-From the JSONL stream it can detect:
+From the JSONL stream it detects activity states with color-coded labels:
 
-- **waiting** — Claude responded, waiting for your input
-- **thinking** — You sent a message, Claude is generating
-- **tool** — Claude invoked a tool (Bash, Read, Write, etc.)
-- **processing** — Tool result received, Claude is analyzing
-- **idle** — Session file exists but process is no longer running
+- **idle** — Session file exists but no recent activity
+- **waiting** — Claude responded, waiting for your input (with 10s grace period to avoid false positives)
+- **thinking** — Claude is generating a response
+- **compacting** — Context compaction in progress
+- **reading** / **writing** / **running** / **searching** / **browsing** / **spawning** — Tool-specific activities
 
-Combined with `ps` and `lsof`, it also surfaces:
+It also surfaces:
 
 | Info | Source |
 |------|--------|
-| Working directory | JSONL + lsof |
+| Working directory | JSONL |
 | Git branch | JSONL |
 | Claude version | JSONL |
 | Model used | JSONL |
-| PID | ps |
-| `--dangerously-skip-permissions` | ps args |
 | Is git worktree | git rev-parse |
 | Main repo path (if worktree) | git worktree |
 | Message count (user/assistant) | JSONL |
-| Last N tools used | JSONL |
+| Last file written | JSONL |
+| Recent conversation (last 5 messages) | JSONL |
+| Last 20 tools used | JSONL |
 | Last activity timestamp | JSONL |
 
 ## Install
@@ -77,29 +80,34 @@ lazyclaude
 
 | Key | Action |
 |-----|--------|
-| `↑` / `k` | Move up |
-| `↓` / `j` | Move down |
+| `↑` / `k` | Move up / scroll up (detail) |
+| `↓` / `j` | Move down / scroll down (detail) |
 | `tab` | Switch focus between panels |
+| `+` / `-` | Adjust time window (±10 minutes) |
+| `f` | Cycle activity filter |
+| `/` | Search sessions by project path |
 | `r` | Force refresh |
 | `q` / `ctrl+c` | Quit |
 
 ## Roadmap
 
-### v0.1 — Core TUI (current)
+### v0.1 — Core TUI
 - [x] Discover all Claude Code sessions from `~/.claude/projects/`
 - [x] Parse JSONL to determine session status
-- [x] Match sessions to running processes via `ps` + `lsof`
 - [x] Detect worktrees
-- [x] Detect `--dangerously-skip-permissions`
 - [x] Show tool history
-- [x] Auto-refresh every 2 seconds
+- [x] FSEvents-based file watcher with debouncing
+- [x] Fallback 30s polling
 
-### v0.2 — Richer session info
-- [ ] Show full conversation preview in detail panel
-- [ ] Display file diff / last file written
-- [ ] Filter sessions (active only, by project, by status)
-- [ ] Sort by status / name / last activity
-- [ ] Search sessions
+### v0.2 — Richer session info (current)
+- [x] Conversation preview in detail panel (last 5 messages, User/AI labels)
+- [x] Last file written with age
+- [x] Filter sessions by activity type
+- [x] Search sessions by project path
+- [x] Time window control (show last N minutes)
+- [x] Color-coded activity states with grace periods
+- [x] Memory-efficient single-pass JSONL parsing
+- [ ] Display file diff for last written file
 
 ### v0.3 — HTTP API
 - [ ] Embedded HTTP server (`--api` flag)
