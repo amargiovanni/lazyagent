@@ -4,7 +4,7 @@ A terminal UI for monitoring all running [Claude Code](https://claude.ai/code) i
 
 ```
 ╭─────────────────────────────╮╭──────────────────────────────────────────╮
-│ PROJECT          STATUS     ││ /Volumes/Crucio/Developer/myapp          │
+│ PROJECT          STATUS     ││ ~/developer/myapp                        │
 │ ────────────────────────     ││ ● running                                │
 │ myapp            running    ││                                           │
 │ myapp/worktree   waiting    ││ Session ID          0279269c…b3cb         │
