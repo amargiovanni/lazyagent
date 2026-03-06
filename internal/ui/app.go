@@ -606,8 +606,8 @@ func (m Model) buildDetailLines(s *claude.Session, width int) []string {
 
 	if s.SessionID != "" {
 		sid := s.SessionID
-		if len(sid) > 12 {
-			sid = sid[:12] + "..."
+		if len(sid) > 16 {
+			sid = sid[:8] + "…" + sid[len(sid)-4:]
 		}
 		add(row("Session ID", sid))
 	}
@@ -641,23 +641,6 @@ func (m Model) buildDetailLines(s *claude.Session, width int) []string {
 		add(row("Last file", filePart+lipgloss.NewStyle().Foreground(colorMuted).Render(agePart)))
 	}
 
-	if len(s.RecentTools) > 0 {
-		add("")
-		add(lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", width-2)))
-		add(lipgloss.NewStyle().Foreground(colorSubtext).Bold(true).Render("Recent Tools"))
-		add("")
-		tools := s.RecentTools
-		if len(tools) > 20 {
-			tools = tools[len(tools)-20:]
-		}
-		for i := len(tools) - 1; i >= 0; i-- {
-			tc := tools[i]
-			ago := formatDuration(time.Since(tc.Timestamp))
-			add(lipgloss.NewStyle().Foreground(colorPrimary).Render("  "+tc.Name) +
-				lipgloss.NewStyle().Foreground(colorMuted).Render("  "+ago))
-		}
-	}
-
 	if len(s.RecentMessages) > 0 {
 		add("")
 		add(lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", width-2)))
@@ -681,6 +664,23 @@ func (m Model) buildDetailLines(s *claude.Session, width int) []string {
 			}
 			add(lipgloss.NewStyle().Foreground(colorSubtext).Render("  "+role+"  ") +
 				lipgloss.NewStyle().Foreground(colorText).Render(text))
+		}
+	}
+
+	if len(s.RecentTools) > 0 {
+		add("")
+		add(lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", width-2)))
+		add(lipgloss.NewStyle().Foreground(colorSubtext).Bold(true).Render("Recent Tools"))
+		add("")
+		tools := s.RecentTools
+		if len(tools) > 20 {
+			tools = tools[len(tools)-20:]
+		}
+		for i := len(tools) - 1; i >= 0; i-- {
+			tc := tools[i]
+			ago := formatDuration(time.Since(tc.Timestamp))
+			add(lipgloss.NewStyle().Foreground(colorPrimary).Render("  "+tc.Name) +
+				lipgloss.NewStyle().Foreground(colorMuted).Render("  "+ago))
 		}
 	}
 
