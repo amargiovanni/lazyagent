@@ -2,10 +2,8 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -33,17 +31,14 @@ type Model struct {
 	width  int
 	height int
 
-	err         error
-	lastRefresh time.Time
-	loading     bool
-	focus       int  // 0 = list, 1 = detail
-	showAll     bool // false = only sessions with a running process
+	err           error
+	lastRefresh   time.Time
+	loading       bool
+	focus         int // 0 = list, 1 = detail
+	windowMinutes int // show sessions modified in last N minutes
 
 	// Sticky activity states, keyed by session ID
 	activities map[string]*activityEntry
-
-	// Kill confirmation: first K press arms it, second K fires
-	pendingKill bool
 }
 
 type keyMap struct {
@@ -52,8 +47,8 @@ type keyMap struct {
 	Tab     key.Binding
 	Quit    key.Binding
 	Refresh key.Binding
-	All     key.Binding
-	Kill    key.Binding
+	Plus    key.Binding
+	Minus   key.Binding
 }
 
 var keys = keyMap{
@@ -62,19 +57,20 @@ var keys = keyMap{
 	Tab:     key.NewBinding(key.WithKeys("tab")),
 	Quit:    key.NewBinding(key.WithKeys("q", "ctrl+c")),
 	Refresh: key.NewBinding(key.WithKeys("r")),
-	All:     key.NewBinding(key.WithKeys("a")),
-	Kill:    key.NewBinding(key.WithKeys("K")),
+	Plus:    key.NewBinding(key.WithKeys("+", "=")),
+	Minus:   key.NewBinding(key.WithKeys("-")),
 }
 
 func NewModel() Model {
 	return Model{
-		loading:    true,
-		activities: make(map[string]*activityEntry),
+		loading:       true,
+		activities:    make(map[string]*activityEntry),
+		windowMinutes: 30,
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(makeLoadCmd(m.showAll), tickCmd())
+	return tea.Batch(makeLoadCmd(), tickCmd())
 }
 
 func tickCmd() tea.Cmd {
@@ -83,27 +79,13 @@ func tickCmd() tea.Cmd {
 	})
 }
 
-// makeLoadCmd returns a tea.Cmd that loads sessions in the appropriate mode.
-// Active mode (showAll=false): process-first — one entry per running process.
-// All mode (showAll=true):    JSONL-first — every conversation file, with PIDs enriched.
-func makeLoadCmd(showAll bool) tea.Cmd {
+// makeLoadCmd loads all JSONL sessions from ~/.claude/projects.
+func makeLoadCmd() tea.Cmd {
 	return func() tea.Msg {
-		procs, _ := claude.FindClaudeProcesses()
-
-		if !showAll {
-			sessions, err := claude.DiscoverActiveSessions(procs)
-			if err != nil {
-				return sessionsMsg{err: err}
-			}
-			sortSessions(sessions)
-			return sessionsMsg{sessions: sessions}
-		}
-
 		sessions, err := claude.DiscoverSessions()
 		if err != nil {
 			return sessionsMsg{err: err}
 		}
-		claude.EnrichWithProcessInfo(sessions, procs)
 		sortSessions(sessions)
 		return sessionsMsg{sessions: sessions}
 	}
@@ -126,7 +108,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 	case tickMsg:
-		return m, tea.Batch(makeLoadCmd(m.showAll), tickCmd())
+		return m, tea.Batch(makeLoadCmd(), tickCmd())
 
 	case sessionsMsg:
 		m.loading = false
@@ -149,42 +131,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case key.Matches(msg, keys.Tab):
-			m.pendingKill = false
 			m.focus = (m.focus + 1) % 2
 			m.detailOffset = 0
 
-		case key.Matches(msg, keys.Kill):
-			sessions := m.visibleSessions()
-			if m.cursor < len(sessions) {
-				s := sessions[m.cursor]
-				if s.PID > 0 {
-					if m.pendingKill {
-						// Second K: execute kill
-						killProcess(s.PID)
-						m.pendingKill = false
-						m.loading = true
-						return m, makeLoadCmd(m.showAll)
-					}
-					// First K: arm confirmation
-					m.pendingKill = true
-				}
+		case key.Matches(msg, keys.Plus):
+			if m.windowMinutes < 480 {
+				m.windowMinutes += 10
+			}
+			if n := len(m.visibleSessions()); m.cursor >= n && n > 0 {
+				m.cursor = n - 1
 			}
 
-		case key.Matches(msg, keys.All):
-			m.pendingKill = false
-			m.showAll = !m.showAll
-			m.cursor = 0
-			m.listOffset = 0
-			m.loading = true
-			return m, makeLoadCmd(m.showAll)
+		case key.Matches(msg, keys.Minus):
+			if m.windowMinutes > 10 {
+				m.windowMinutes -= 10
+			}
+			if n := len(m.visibleSessions()); m.cursor >= n && n > 0 {
+				m.cursor = n - 1
+			}
 
 		case key.Matches(msg, keys.Refresh):
-			m.pendingKill = false
 			m.loading = true
-			return m, makeLoadCmd(m.showAll)
+			return m, makeLoadCmd()
 
 		case key.Matches(msg, keys.Up):
-			m.pendingKill = false
 			if m.focus == 0 {
 				if m.cursor > 0 {
 					m.cursor--
@@ -197,7 +167,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, keys.Down):
-			m.pendingKill = false
 			if m.focus == 0 {
 				if m.cursor < len(m.visibleSessions())-1 {
 					m.cursor++
@@ -212,16 +181,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// visibleSessions returns sessions to display.
-// In active mode the list already contains only running sessions (process-first).
-// In all mode we filter out sidechains to keep the list clean.
+// visibleSessions returns sessions modified within the time window, excluding sidechains.
 func (m Model) visibleSessions() []*claude.Session {
-	if !m.showAll {
-		return m.sessions // already process-first, no extra filtering needed
-	}
+	cutoff := time.Now().Add(-time.Duration(m.windowMinutes) * time.Minute)
 	var out []*claude.Session
 	for _, s := range m.sessions {
-		if !s.IsSidechain {
+		if !s.IsSidechain && s.LastActivity.After(cutoff) {
 			out = append(out, s)
 		}
 	}
@@ -245,20 +210,6 @@ func (m *Model) ensureListVisible() {
 }
 
 // ── Layout math ──────────────────────────────────────────────────────────────
-//
-// Each panel uses border only (no padding): 2 cols overhead (left+right border),
-// 2 rows overhead (top+bottom border).
-//
-// Two panels side by side:
-//   (listW + 2) + (detailW + 2) = m.width
-//   listW + detailW = m.width - 4
-//
-// Height:
-//   titleBar(1) + borderTop(1) + innerH + borderBottom(1) + helpBar(1) = m.height
-//   innerH = m.height - 4
-//
-// Visible list rows (inside panel, minus header row + divider row):
-//   visibleRows = innerH - 2
 
 func (m Model) dims() (listW, detailW, innerH int) {
 	total := m.width - 4
@@ -313,30 +264,12 @@ func (m Model) View() string {
 }
 
 func (m Model) renderTitleBar() string {
-	// Kill confirmation banner replaces normal title bar
-	if m.pendingKill {
-		sessions := m.visibleSessions()
-		pid := 0
-		if m.cursor < len(sessions) {
-			pid = sessions[m.cursor].PID
-		}
-		msg := fmt.Sprintf("  Kill PID %d? Press K to confirm, any other key to cancel  ", pid)
-		return lipgloss.NewStyle().
-			Background(colorDanger).Foreground(colorText).Bold(true).
-			Width(m.width).
-			Render(msg)
-	}
-
 	left := titleStyle.Render("lazyclaude")
 	vis := m.visibleSessions()
-	filterLabel := "active"
-	if m.showAll {
-		filterLabel = "all"
-	}
 	count := lipgloss.NewStyle().
 		Background(colorPrimary).Foreground(colorSubtext).
 		Padding(0, 1).
-		Render(fmt.Sprintf("%d sessions [%s]", len(vis), filterLabel))
+		Render(fmt.Sprintf("%d sessions [last %dm]", len(vis), m.windowMinutes))
 	refresh := lipgloss.NewStyle().
 		Background(colorPrimary).Foreground(colorMuted).
 		Padding(0, 1).
@@ -368,12 +301,8 @@ func (m Model) renderList(listW int) string {
 		)
 	}
 	if len(sessions) == 0 {
-		msg := "no active sessions"
-		if m.showAll {
-			msg = "no sessions found"
-		}
 		return pStyle.Width(listW).Height(innerH).Render(
-			lipgloss.NewStyle().Foreground(colorMuted).Render(msg),
+			lipgloss.NewStyle().Foreground(colorMuted).Render("no sessions found"),
 		)
 	}
 
@@ -412,12 +341,6 @@ func (m Model) renderList(listW int) string {
 	return pStyle.Width(listW).Height(innerH).Render(strings.Join(rows, "\n"))
 }
 
-// renderListRow renders exactly ONE line per session, no wrapping.
-//
-// Layout: [name padded to nameW][status padded to statusColW]
-// No pre-styled concatenation — we use fmt.Sprintf for the plain name padding,
-// then render each column independently with the SAME background (if selected)
-// so the background covers the full row width without gaps.
 func (m Model) renderListRow(s *claude.Session, nameW int, selected bool) string {
 	activity := m.activityFor(s.SessionID)
 	actColor, ok := activityColors[activity]
@@ -482,18 +405,18 @@ func (m Model) buildDetailLines(s *claude.Session, width int) []string {
 	var lines []string
 	add := func(line string) { lines = append(lines, line) }
 
-	// CWD (truncated to fit)
+	// CWD
 	add(lipgloss.NewStyle().Foreground(colorText).Bold(true).
 		Render(shortName(s.CWD, width-2)))
 
-	// Activity (sticky) + raw status + current tool
+	// Activity + current tool
 	activity := m.activityFor(s.SessionID)
 	actColor := activityColors[activity]
 	statusLine := lipgloss.NewStyle().Foreground(actColor).Bold(true).Render("● ") +
 		lipgloss.NewStyle().Foreground(actColor).Bold(true).Render(string(activity))
 	if s.CurrentTool != "" {
 		statusLine += "  " + lipgloss.NewStyle().Foreground(colorMuted).
-			Render("("+s.CurrentTool+")")
+			Render("(" + s.CurrentTool + ")")
 	}
 	add(statusLine)
 	add("")
@@ -502,12 +425,6 @@ func (m Model) buildDetailLines(s *claude.Session, width int) []string {
 
 	row := func(label, value string) string {
 		return labelStyle.Render(label) + valueStyle.Render(value)
-	}
-
-	if s.PID > 0 {
-		add(row("PID", fmt.Sprintf("%d", s.PID)))
-	} else {
-		add(row("PID", lipgloss.NewStyle().Foreground(colorMuted).Render("not running")))
 	}
 
 	if s.SessionID != "" {
@@ -537,12 +454,6 @@ func (m Model) buildDetailLines(s *claude.Session, width int) []string {
 	}
 	add(row("Worktree", wtStr))
 
-	if s.IsDangerous {
-		add(row("Permissions",
-			lipgloss.NewStyle().Foreground(colorDanger).Bold(true).
-				Render("! dangerously-skip-permissions")))
-	}
-
 	add(row("Messages", fmt.Sprintf("%d  (%d user, %d assistant)",
 		s.TotalMessages, s.UserMessages, s.AssistantMessages)))
 	add(row("Last activity", formatDuration(time.Since(s.LastActivity))))
@@ -552,7 +463,6 @@ func (m Model) buildDetailLines(s *claude.Session, width int) []string {
 		add(lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", width-2)))
 		add(lipgloss.NewStyle().Foreground(colorSubtext).Bold(true).Render("Recent Tools"))
 		add("")
-		// Most recent first
 		tools := s.RecentTools
 		if len(tools) > 20 {
 			tools = tools[len(tools)-20:]
@@ -572,17 +482,12 @@ func (m Model) buildDetailLines(s *claude.Session, width int) []string {
 
 func (m Model) renderHelp() string {
 	var parts []string
-	allLabel := "show all"
-	if m.showAll {
-		allLabel = "active only"
-	}
 	if m.focus == 0 {
 		parts = []string{
 			helpKeyStyle.Render("k/↑") + helpStyle.Render(" prev"),
 			helpKeyStyle.Render("j/↓") + helpStyle.Render(" next"),
 			helpKeyStyle.Render("tab") + helpStyle.Render(" detail"),
-			helpKeyStyle.Render("K") + helpStyle.Render(" kill"),
-			helpKeyStyle.Render("a") + helpStyle.Render(" "+allLabel),
+			helpKeyStyle.Render("+/-") + helpStyle.Render(" time window"),
 			helpKeyStyle.Render("r") + helpStyle.Render(" refresh"),
 			helpKeyStyle.Render("q") + helpStyle.Render(" quit"),
 		}
@@ -591,8 +496,7 @@ func (m Model) renderHelp() string {
 			helpKeyStyle.Render("k/↑") + helpStyle.Render(" scroll up"),
 			helpKeyStyle.Render("j/↓") + helpStyle.Render(" scroll dn"),
 			helpKeyStyle.Render("tab") + helpStyle.Render(" list"),
-			helpKeyStyle.Render("K") + helpStyle.Render(" kill"),
-			helpKeyStyle.Render("a") + helpStyle.Render(" "+allLabel),
+			helpKeyStyle.Render("+/-") + helpStyle.Render(" time window"),
 			helpKeyStyle.Render("r") + helpStyle.Render(" refresh"),
 			helpKeyStyle.Render("q") + helpStyle.Render(" quit"),
 		}
@@ -618,14 +522,12 @@ func shortName(path string, maxLen int) string {
 	if len(base)+2 <= maxLen {
 		return "…/" + base
 	}
-	// Last resort: truncate base
 	if maxLen > 3 {
 		return "…" + base[len(base)-(maxLen-1):]
 	}
 	return base[:maxLen]
 }
 
-// padRight pads s with spaces to exactly n chars (byte-length based, fine for ASCII paths).
 func padRight(s string, n int) string {
 	if len(s) >= n {
 		return s[:n]
@@ -647,15 +549,6 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	}
 	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
-}
-
-// killProcess sends SIGTERM to the given PID.
-func killProcess(pid int) {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return
-	}
-	_ = proc.Signal(syscall.SIGTERM)
 }
 
 func clamp(lo, hi, v int) int {

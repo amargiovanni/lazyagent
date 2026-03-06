@@ -44,12 +44,10 @@ type Session struct {
 	JSONLPath string
 
 	// Runtime
-	PID         int    // 0 if not found
 	CWD         string // working directory
 	Version     string // claude version
 	Model       string // model being used
 	GitBranch   string
-	IsDangerous bool // --dangerously-skip-permissions
 	IsSidechain bool // true = sub-agent spawned by another session
 
 	// Git / worktree
