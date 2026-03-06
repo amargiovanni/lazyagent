@@ -2,8 +2,10 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -36,6 +38,9 @@ type Model struct {
 	loading     bool
 	focus       int  // 0 = list, 1 = detail
 	showAll     bool // false = only sessions with a running process
+
+	// Kill confirmation: first K press arms it, second K fires
+	pendingKill bool
 }
 
 type keyMap struct {
@@ -45,6 +50,7 @@ type keyMap struct {
 	Quit    key.Binding
 	Refresh key.Binding
 	All     key.Binding
+	Kill    key.Binding
 }
 
 var keys = keyMap{
@@ -54,6 +60,7 @@ var keys = keyMap{
 	Quit:    key.NewBinding(key.WithKeys("q", "ctrl+c")),
 	Refresh: key.NewBinding(key.WithKeys("r")),
 	All:     key.NewBinding(key.WithKeys("a")),
+	Kill:    key.NewBinding(key.WithKeys("K")),
 }
 
 func NewModel() Model {
@@ -119,19 +126,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case key.Matches(msg, keys.Tab):
+			m.pendingKill = false
 			m.focus = (m.focus + 1) % 2
 			m.detailOffset = 0
 
+		case key.Matches(msg, keys.Kill):
+			sessions := m.visibleSessions()
+			if m.cursor < len(sessions) {
+				s := sessions[m.cursor]
+				if s.PID > 0 {
+					if m.pendingKill {
+						// Second K: execute kill
+						killProcess(s.PID)
+						m.pendingKill = false
+						m.loading = true
+						return m, loadSessions
+					}
+					// First K: arm confirmation
+					m.pendingKill = true
+				}
+			}
+
 		case key.Matches(msg, keys.All):
+			m.pendingKill = false
 			m.showAll = !m.showAll
 			m.cursor = 0
 			m.listOffset = 0
 
 		case key.Matches(msg, keys.Refresh):
+			m.pendingKill = false
 			m.loading = true
 			return m, loadSessions
 
 		case key.Matches(msg, keys.Up):
+			m.pendingKill = false
 			if m.focus == 0 {
 				if m.cursor > 0 {
 					m.cursor--
@@ -144,6 +172,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, keys.Down):
+			m.pendingKill = false
 			if m.focus == 0 {
 				if m.cursor < len(m.visibleSessions())-1 {
 					m.cursor++
@@ -257,6 +286,20 @@ func (m Model) View() string {
 }
 
 func (m Model) renderTitleBar() string {
+	// Kill confirmation banner replaces normal title bar
+	if m.pendingKill {
+		sessions := m.visibleSessions()
+		pid := 0
+		if m.cursor < len(sessions) {
+			pid = sessions[m.cursor].PID
+		}
+		msg := fmt.Sprintf("  Kill PID %d? Press K to confirm, any other key to cancel  ", pid)
+		return lipgloss.NewStyle().
+			Background(colorDanger).Foreground(colorText).Bold(true).
+			Width(m.width).
+			Render(msg)
+	}
+
 	left := titleStyle.Render("lazyclaude")
 	vis := m.visibleSessions()
 	filterLabel := "active"
@@ -273,7 +316,6 @@ func (m Model) renderTitleBar() string {
 		Render("updated " + formatDuration(time.Since(m.lastRefresh)))
 
 	bar := lipgloss.JoinHorizontal(lipgloss.Top, left, count, refresh)
-	// fill remaining width with the primary background
 	return lipgloss.NewStyle().
 		Background(colorPrimary).
 		Width(m.width).
@@ -512,6 +554,7 @@ func (m Model) renderHelp() string {
 			helpKeyStyle.Render("k/↑") + helpStyle.Render(" prev"),
 			helpKeyStyle.Render("j/↓") + helpStyle.Render(" next"),
 			helpKeyStyle.Render("tab") + helpStyle.Render(" detail"),
+			helpKeyStyle.Render("K") + helpStyle.Render(" kill"),
 			helpKeyStyle.Render("a") + helpStyle.Render(" "+allLabel),
 			helpKeyStyle.Render("r") + helpStyle.Render(" refresh"),
 			helpKeyStyle.Render("q") + helpStyle.Render(" quit"),
@@ -521,6 +564,7 @@ func (m Model) renderHelp() string {
 			helpKeyStyle.Render("k/↑") + helpStyle.Render(" scroll up"),
 			helpKeyStyle.Render("j/↓") + helpStyle.Render(" scroll dn"),
 			helpKeyStyle.Render("tab") + helpStyle.Render(" list"),
+			helpKeyStyle.Render("K") + helpStyle.Render(" kill"),
 			helpKeyStyle.Render("a") + helpStyle.Render(" "+allLabel),
 			helpKeyStyle.Render("r") + helpStyle.Render(" refresh"),
 			helpKeyStyle.Render("q") + helpStyle.Render(" quit"),
@@ -576,6 +620,15 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	}
 	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+}
+
+// killProcess sends SIGTERM to the given PID.
+func killProcess(pid int) {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+	_ = proc.Signal(syscall.SIGTERM)
 }
 
 func clamp(lo, hi, v int) int {
