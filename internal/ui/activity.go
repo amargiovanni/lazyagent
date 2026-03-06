@@ -11,11 +11,15 @@ import (
 // the tool finishes, unless replaced by a newer activity.
 const ActivityTimeout = 30 * time.Second
 
+// WaitingTimeout is how long "waiting" stays visible before falling back to idle.
+const WaitingTimeout = 2 * time.Minute
+
 // ActivityKind is the human-readable label shown in the session list.
 type ActivityKind string
 
 const (
 	ActivityIdle      ActivityKind = "idle"
+	ActivityWaiting   ActivityKind = "waiting"   // Claude finished, awaiting user input
 	ActivityThinking  ActivityKind = "thinking"  // Claude generating a response
 	ActivityReading   ActivityKind = "reading"   // Read
 	ActivityWriting   ActivityKind = "writing"   // Write / Edit
@@ -25,19 +29,10 @@ const (
 	ActivitySpawning  ActivityKind = "spawning"  // Agent (subagent)
 )
 
-// isTransient returns true for tool-based activities that should be sticky.
-func (a ActivityKind) isTransient() bool {
-	switch a {
-	case ActivityReading, ActivityWriting, ActivityRunning,
-		ActivitySearching, ActivityBrowsing, ActivitySpawning:
-		return true
-	}
-	return false
-}
-
 // activityColors maps each activity kind to a display color.
 var activityColors = map[ActivityKind]lipgloss.Color{
 	ActivityIdle:      colorMuted,
+	ActivityWaiting:   lipgloss.Color("#4ADE80"), // green
 	ActivityThinking:  colorWarning,              // amber
 	ActivityReading:   lipgloss.Color("#38BDF8"), // sky blue
 	ActivityWriting:   lipgloss.Color("#FB923C"), // orange
@@ -53,16 +48,41 @@ type activityEntry struct {
 	lastSeen time.Time // last time this kind was confirmed from JSONL
 }
 
-// resolveRawActivity determines the instantaneous activity from a session's
-// current status and last tool — no stickiness applied here.
-// Sessions without a running process are always idle regardless of JSONL state.
-func resolveRawActivity(s *claude.Session) ActivityKind {
-	if s.PID == 0 {
+// resolveActivity determines the display activity for a session.
+//
+// Priority:
+//  1. StatusWaitingForUser within WaitingTimeout (2m) → "waiting".
+//     Uses its own longer timeout since Claude finished and the user hasn't replied yet.
+//  2. LastActivity older than ActivityTimeout (30s) → idle.
+//  3. Most recent tool in RecentTools within ActivityTimeout → show that tool activity.
+//     Handles tool executions that complete between polls.
+//  4. Current JSONL status → thinking if Claude is processing, idle otherwise.
+func resolveActivity(s *claude.Session, now time.Time) ActivityKind {
+	sinceActivity := now.Sub(s.LastActivity)
+
+	// Claude finished responding and is waiting for user input.
+	if s.Status == claude.StatusWaitingForUser {
+		if !s.LastActivity.IsZero() && sinceActivity < WaitingTimeout {
+			return ActivityWaiting
+		}
 		return ActivityIdle
 	}
-	switch s.Status {
-	case claude.StatusWaitingForUser:
+
+	// Gate on LastActivity for all other states.
+	if s.LastActivity.IsZero() || sinceActivity > ActivityTimeout {
 		return ActivityIdle
+	}
+
+	// Most recent tool within timeout takes priority.
+	if len(s.RecentTools) > 0 {
+		last := s.RecentTools[len(s.RecentTools)-1]
+		if !last.Timestamp.IsZero() && now.Sub(last.Timestamp) < ActivityTimeout {
+			return toolActivity(last.Name)
+		}
+	}
+
+	// Active but no recent tool — use JSONL status.
+	switch s.Status {
 	case claude.StatusThinking, claude.StatusProcessingResult:
 		return ActivityThinking
 	case claude.StatusExecutingTool:
@@ -94,15 +114,9 @@ func toolActivity(tool string) ActivityKind {
 	}
 }
 
-// updateActivities applies the sticky-timeout logic for all sessions.
-// Called on every sessionsMsg refresh.
-//
-// Rules:
-//  1. Tool active (transient) → enter/stay in that activity, reset timer.
-//  2. Same transient activity again → reset timer only (no visual change).
-//  3. Non-tool state (waiting/thinking/idle) but previous transient is within
-//     timeout → keep showing the transient activity.
-//  4. Timeout expired or never had a transient → show real state.
+// updateActivities resolves and stores the current activity for each session.
+// The timeout logic lives in resolveActivity (via RecentTools timestamps),
+// so this is a straightforward map update.
 func (m *Model) updateActivities(now time.Time) {
 	if m.activities == nil {
 		m.activities = make(map[string]*activityEntry)
@@ -112,26 +126,7 @@ func (m *Model) updateActivities(now time.Time) {
 		if id == "" {
 			continue
 		}
-		raw := resolveRawActivity(s)
-		entry, exists := m.activities[id]
-
-		if raw.isTransient() {
-			if !exists || entry.kind != raw {
-				// New transient activity: switch immediately
-				m.activities[id] = &activityEntry{kind: raw, lastSeen: now}
-			} else {
-				// Same transient: just reset the timer
-				entry.lastSeen = now
-			}
-		} else {
-			// Non-transient (waiting / thinking / idle)
-			if exists && entry.kind.isTransient() && now.Sub(entry.lastSeen) < ActivityTimeout {
-				// Still within timeout: keep showing the previous tool activity
-			} else {
-				// Timeout expired or was already non-transient
-				m.activities[id] = &activityEntry{kind: raw, lastSeen: now}
-			}
-		}
+		m.activities[id] = &activityEntry{kind: resolveActivity(s, now), lastSeen: now}
 	}
 }
 
