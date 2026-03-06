@@ -55,10 +55,13 @@ type activityEntry struct {
 
 // resolveRawActivity determines the instantaneous activity from a session's
 // current status and last tool — no stickiness applied here.
+// Sessions without a running process are always idle regardless of JSONL state.
 func resolveRawActivity(s *claude.Session) ActivityKind {
+	if s.PID == 0 {
+		return ActivityIdle
+	}
 	switch s.Status {
 	case claude.StatusWaitingForUser:
-		// Claude responded, session is effectively idle from the user's POV
 		return ActivityIdle
 	case claude.StatusThinking, claude.StatusProcessingResult:
 		return ActivityThinking
