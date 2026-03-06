@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -52,9 +51,8 @@ type Model struct {
 	// Used to apply a grace period before displaying ActivityWaiting.
 	waitingSince map[string]time.Time
 
-	// Filter / sort / search
+	// Filter / search
 	activityFilter ActivityKind // "" = show all
-	sortBy         string       // "last-activity" | "name" | "activity"
 	searchMode     bool
 	searchQuery    string
 }
@@ -67,9 +65,8 @@ type keyMap struct {
 	Refresh key.Binding
 	Plus    key.Binding
 	Minus   key.Binding
-	Filter  key.Binding
-	Sort    key.Binding
-	Search  key.Binding
+	Filter key.Binding
+	Search key.Binding
 	Esc     key.Binding
 }
 
@@ -81,9 +78,8 @@ var keys = keyMap{
 	Refresh: key.NewBinding(key.WithKeys("r")),
 	Plus:    key.NewBinding(key.WithKeys("+", "=")),
 	Minus:   key.NewBinding(key.WithKeys("-")),
-	Filter:  key.NewBinding(key.WithKeys("f")),
-	Sort:    key.NewBinding(key.WithKeys("s")),
-	Search:  key.NewBinding(key.WithKeys("/")),
+	Filter: key.NewBinding(key.WithKeys("f")),
+	Search: key.NewBinding(key.WithKeys("/")),
 	Esc:     key.NewBinding(key.WithKeys("esc")),
 }
 
@@ -94,7 +90,6 @@ func NewModel() Model {
 		activities:    make(map[string]*activityEntry),
 		windowMinutes: 30,
 		watcher:       w,
-		sortBy:        "last-activity",
 	}
 }
 
@@ -131,33 +126,13 @@ func makeLoadCmd() tea.Cmd {
 	}
 }
 
-var activityRank = map[ActivityKind]int{
-	ActivityRunning:  6,
-	ActivityWriting:  5,
-	ActivityReading:  4,
-	ActivityThinking: 3,
-	ActivityWaiting:  2,
-	ActivityIdle:     1,
-}
-
-func (m Model) sortSessions(sessions []*claude.Session) {
-	switch m.sortBy {
-	case "name":
-		sort.SliceStable(sessions, func(i, j int) bool {
-			a := strings.ToLower(filepath.Base(sessions[i].CWD))
-			b := strings.ToLower(filepath.Base(sessions[j].CWD))
-			return a < b
-		})
-	case "activity":
-		sort.SliceStable(sessions, func(i, j int) bool {
-			ra := activityRank[m.activityFor(sessions[i].SessionID)]
-			rb := activityRank[m.activityFor(sessions[j].SessionID)]
-			return ra > rb
-		})
-	default: // "last-activity"
-		sort.SliceStable(sessions, func(i, j int) bool {
-			return sessions[i].LastActivity.After(sessions[j].LastActivity)
-		})
+func sortSessions(sessions []*claude.Session) {
+	for i := 0; i < len(sessions); i++ {
+		for j := i + 1; j < len(sessions); j++ {
+			if sessions[j].LastActivity.After(sessions[i].LastActivity) {
+				sessions[i], sessions[j] = sessions[j], sessions[i]
+			}
+		}
 	}
 }
 
@@ -187,7 +162,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.sessions = msg.sessions
 			m.updateActivities(now)
-			m.sortSessions(m.sessions)
+			sortSessions(m.sessions)
 			visible := m.visibleSessions()
 			// Try to restore selection by session ID.
 			found := false
@@ -298,17 +273,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activityFilter = nextActivityFilter(m.activityFilter)
 			m.cursor = 0
 			m.listOffset = 0
-
-		case key.Matches(msg, keys.Sort):
-			switch m.sortBy {
-			case "last-activity":
-				m.sortBy = "name"
-			case "name":
-				m.sortBy = "activity"
-			default:
-				m.sortBy = "last-activity"
-			}
-			m.sortSessions(m.sessions)
 
 		case key.Matches(msg, keys.Search):
 			m.searchMode = true
@@ -714,9 +678,8 @@ func (m Model) renderHelp() string {
 			helpKeyStyle.Render("k/↑") + helpStyle.Render(" prev"),
 			helpKeyStyle.Render("j/↓") + helpStyle.Render(" next"),
 			helpKeyStyle.Render("tab") + helpStyle.Render(" detail"),
-			helpKeyStyle.Render("+/-") + helpStyle.Render(" time window"),
+			helpKeyStyle.Render("+/-") + helpStyle.Render(" mins"),
 			helpKeyStyle.Render("f") + helpStyle.Render(" filter:" + filterLabel),
-			helpKeyStyle.Render("s") + helpStyle.Render(" sort:" + m.sortBy),
 			helpKeyStyle.Render("/") + helpStyle.Render(" search"),
 			helpKeyStyle.Render("r") + helpStyle.Render(" refresh"),
 			helpKeyStyle.Render("q") + helpStyle.Render(" quit"),
@@ -726,9 +689,8 @@ func (m Model) renderHelp() string {
 			helpKeyStyle.Render("k/↑") + helpStyle.Render(" scroll up"),
 			helpKeyStyle.Render("j/↓") + helpStyle.Render(" scroll dn"),
 			helpKeyStyle.Render("tab") + helpStyle.Render(" list"),
-			helpKeyStyle.Render("+/-") + helpStyle.Render(" time window"),
+			helpKeyStyle.Render("+/-") + helpStyle.Render(" mins"),
 			helpKeyStyle.Render("f") + helpStyle.Render(" filter:" + filterLabel),
-			helpKeyStyle.Render("s") + helpStyle.Render(" sort:" + m.sortBy),
 			helpKeyStyle.Render("/") + helpStyle.Render(" search"),
 			helpKeyStyle.Render("r") + helpStyle.Render(" refresh"),
 			helpKeyStyle.Render("q") + helpStyle.Render(" quit"),
