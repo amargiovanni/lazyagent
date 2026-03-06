@@ -99,13 +99,22 @@ func ParseJSONL(path string) (*Session, error) {
 		}
 	}
 
-	// Count messages and collect tool calls
+	// Count messages and collect tool calls, conversation messages, and last file write
 	var recentTools []ToolCall
+	var recentMessages []ConversationMessage
 	for _, e := range entries {
+		ts, _ := time.Parse(time.RFC3339Nano, e.Timestamp)
 		switch e.Type {
 		case "user":
 			if e.Message != nil && !isToolResult(e.Message.Content) {
 				session.UserMessages++
+				if text := firstTextBlock(e.Message.Content); text != "" {
+					recentMessages = append(recentMessages, ConversationMessage{
+						Role:      "user",
+						Text:      truncate(text, 300),
+						Timestamp: ts,
+					})
+				}
 			}
 		case "assistant":
 			if e.Message != nil {
@@ -113,10 +122,25 @@ func ParseJSONL(path string) (*Session, error) {
 				if e.Message.Model != "" {
 					session.Model = e.Message.Model
 				}
+				if text := firstTextBlock(e.Message.Content); text != "" {
+					recentMessages = append(recentMessages, ConversationMessage{
+						Role:      "assistant",
+						Text:      truncate(text, 300),
+						Timestamp: ts,
+					})
+				}
 				for _, c := range e.Message.Content {
 					if c.Type == "tool_use" {
-						ts, _ := time.Parse(time.RFC3339Nano, e.Timestamp)
 						recentTools = append(recentTools, ToolCall{Name: c.Name, Timestamp: ts})
+						if c.Name == "Write" || c.Name == "Edit" || c.Name == "NotebookEdit" {
+							var input map[string]any
+							if err := json.Unmarshal(c.Input, &input); err == nil {
+								if fp, ok := input["file_path"].(string); ok && fp != "" {
+									session.LastFileWrite = fp
+									session.LastFileWriteAt = ts
+								}
+							}
+						}
 					}
 				}
 			}
@@ -129,6 +153,12 @@ func ParseJSONL(path string) (*Session, error) {
 		recentTools = recentTools[len(recentTools)-20:]
 	}
 	session.RecentTools = recentTools
+
+	// Keep last 10 conversation messages
+	if len(recentMessages) > 10 {
+		recentMessages = recentMessages[len(recentMessages)-10:]
+	}
+	session.RecentMessages = recentMessages
 
 	// Determine status from the last meaningful entry
 	last := lastMeaningful(entries)
@@ -156,6 +186,22 @@ func isToolResult(content []jsonlContent) bool {
 		}
 	}
 	return false
+}
+
+func firstTextBlock(content []jsonlContent) string {
+	for _, c := range content {
+		if c.Type == "text" && c.Text != "" {
+			return c.Text
+		}
+	}
+	return ""
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 func lastMeaningful(entries []jsonlEntry) *jsonlEntry {

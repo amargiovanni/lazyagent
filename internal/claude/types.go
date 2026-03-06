@@ -37,6 +37,13 @@ type ToolCall struct {
 	Timestamp time.Time
 }
 
+// ConversationMessage holds a single human-readable message from the conversation.
+type ConversationMessage struct {
+	Role      string    // "user" or "assistant"
+	Text      string    // first text block, truncated to 300 chars
+	Timestamp time.Time
+}
+
 // Session holds all observable information about a Claude Code instance.
 type Session struct {
 	// Identity
@@ -61,6 +68,13 @@ type Session struct {
 	LastSummaryAt time.Time // timestamp of last compaction summary entry
 	TotalMessages int
 	RecentTools   []ToolCall // last N tool calls
+
+	// Conversation preview
+	RecentMessages []ConversationMessage // last 10 human-readable messages
+
+	// Last file written/edited
+	LastFileWrite   string    // absolute path of most recent Write/Edit/NotebookEdit
+	LastFileWriteAt time.Time // timestamp of that tool call
 
 	// Counts
 	UserMessages      int

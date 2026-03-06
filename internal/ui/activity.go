@@ -59,18 +59,28 @@ type activityEntry struct {
 // resolveActivity determines the display activity for a session.
 //
 // Priority:
-//  1. StatusWaitingForUser within WaitingTimeout (2m) → "waiting".
-//     Uses its own longer timeout since Claude finished and the user hasn't replied yet.
-//  2. LastActivity older than ActivityTimeout (30s) → idle.
-//  3. Most recent tool in RecentTools within ActivityTimeout → show that tool activity.
-//     Handles tool executions that complete between polls.
-//  4. Current JSONL status → thinking if Claude is processing, idle otherwise.
+//  1. Compacting (summary entry written recently).
+//  2. Most recent tool in RecentTools within ActivityTimeout → show that tool activity.
+//     Must come before WaitingForUser: Claude often uses a tool and then sends a final
+//     text response, making status flip to WaitingForUser while the tool is still recent.
+//  3. StatusWaitingForUser within WaitingTimeout (2m) → "waiting" (with grace period).
+//  4. LastActivity older than ActivityTimeout (30s) → idle.
+//  5. Current JSONL status → thinking if Claude is processing, idle otherwise.
 func resolveActivity(s *claude.Session, now time.Time) ActivityKind {
 	sinceActivity := now.Sub(s.LastActivity)
 
 	// Context compaction: a summary entry was written recently.
 	if !s.LastSummaryAt.IsZero() && now.Sub(s.LastSummaryAt) < ActivityTimeout {
 		return ActivityCompacting
+	}
+
+	// Most recent tool within timeout takes priority over all states, including
+	// WaitingForUser, since the tool ran just before Claude sent its final response.
+	if len(s.RecentTools) > 0 {
+		last := s.RecentTools[len(s.RecentTools)-1]
+		if !last.Timestamp.IsZero() && now.Sub(last.Timestamp) < ActivityTimeout {
+			return toolActivity(last.Name)
+		}
 	}
 
 	// Claude finished responding and is waiting for user input.
@@ -84,14 +94,6 @@ func resolveActivity(s *claude.Session, now time.Time) ActivityKind {
 	// Gate on LastActivity for all other states.
 	if s.LastActivity.IsZero() || sinceActivity > ActivityTimeout {
 		return ActivityIdle
-	}
-
-	// Most recent tool within timeout takes priority.
-	if len(s.RecentTools) > 0 {
-		last := s.RecentTools[len(s.RecentTools)-1]
-		if !last.Timestamp.IsZero() && now.Sub(last.Timestamp) < ActivityTimeout {
-			return toolActivity(last.Name)
-		}
 	}
 
 	// Active but no recent tool — use JSONL status.

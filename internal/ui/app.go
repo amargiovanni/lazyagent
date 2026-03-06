@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -50,6 +51,12 @@ type Model struct {
 	// waitingSince tracks when each session first entered StatusWaitingForUser.
 	// Used to apply a grace period before displaying ActivityWaiting.
 	waitingSince map[string]time.Time
+
+	// Filter / sort / search
+	activityFilter ActivityKind // "" = show all
+	sortBy         string       // "last-activity" | "name" | "activity"
+	searchMode     bool
+	searchQuery    string
 }
 
 type keyMap struct {
@@ -60,6 +67,10 @@ type keyMap struct {
 	Refresh key.Binding
 	Plus    key.Binding
 	Minus   key.Binding
+	Filter  key.Binding
+	Sort    key.Binding
+	Search  key.Binding
+	Esc     key.Binding
 }
 
 var keys = keyMap{
@@ -70,6 +81,10 @@ var keys = keyMap{
 	Refresh: key.NewBinding(key.WithKeys("r")),
 	Plus:    key.NewBinding(key.WithKeys("+", "=")),
 	Minus:   key.NewBinding(key.WithKeys("-")),
+	Filter:  key.NewBinding(key.WithKeys("f")),
+	Sort:    key.NewBinding(key.WithKeys("s")),
+	Search:  key.NewBinding(key.WithKeys("/")),
+	Esc:     key.NewBinding(key.WithKeys("esc")),
 }
 
 func NewModel() Model {
@@ -79,6 +94,7 @@ func NewModel() Model {
 		activities:    make(map[string]*activityEntry),
 		windowMinutes: 30,
 		watcher:       w,
+		sortBy:        "last-activity",
 	}
 }
 
@@ -111,18 +127,37 @@ func makeLoadCmd() tea.Cmd {
 		if err != nil {
 			return sessionsMsg{err: err}
 		}
-		sortSessions(sessions)
 		return sessionsMsg{sessions: sessions}
 	}
 }
 
-func sortSessions(sessions []*claude.Session) {
-	for i := 0; i < len(sessions); i++ {
-		for j := i + 1; j < len(sessions); j++ {
-			if sessions[j].LastActivity.After(sessions[i].LastActivity) {
-				sessions[i], sessions[j] = sessions[j], sessions[i]
-			}
-		}
+var activityRank = map[ActivityKind]int{
+	ActivityRunning:  6,
+	ActivityWriting:  5,
+	ActivityReading:  4,
+	ActivityThinking: 3,
+	ActivityWaiting:  2,
+	ActivityIdle:     1,
+}
+
+func (m Model) sortSessions(sessions []*claude.Session) {
+	switch m.sortBy {
+	case "name":
+		sort.SliceStable(sessions, func(i, j int) bool {
+			a := strings.ToLower(filepath.Base(sessions[i].CWD))
+			b := strings.ToLower(filepath.Base(sessions[j].CWD))
+			return a < b
+		})
+	case "activity":
+		sort.SliceStable(sessions, func(i, j int) bool {
+			ra := activityRank[m.activityFor(sessions[i].SessionID)]
+			rb := activityRank[m.activityFor(sessions[j].SessionID)]
+			return ra > rb
+		})
+	default: // "last-activity"
+		sort.SliceStable(sessions, func(i, j int) bool {
+			return sessions[i].LastActivity.After(sessions[j].LastActivity)
+		})
 	}
 }
 
@@ -152,6 +187,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.sessions = msg.sessions
 			m.updateActivities(now)
+			m.sortSessions(m.sessions)
 			visible := m.visibleSessions()
 			// Try to restore selection by session ID.
 			found := false
@@ -177,6 +213,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		// Search mode intercepts all keys except esc.
+		if m.searchMode {
+			switch msg.String() {
+			case "esc":
+				m.searchMode = false
+				m.searchQuery = ""
+				m.cursor = 0
+				m.listOffset = 0
+			case "backspace":
+				if len(m.searchQuery) > 0 {
+					m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
+				}
+				m.cursor = 0
+				m.listOffset = 0
+			default:
+				if len(msg.Runes) == 1 {
+					m.searchQuery += string(msg.Runes)
+				}
+				m.cursor = 0
+				m.listOffset = 0
+			}
+			return m, nil
+		}
+
 		switch {
 		case key.Matches(msg, keys.Quit):
 			return m, tea.Quit
@@ -233,10 +293,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.detailOffset++
 			}
+
+		case key.Matches(msg, keys.Filter):
+			m.activityFilter = nextActivityFilter(m.activityFilter)
+			m.cursor = 0
+			m.listOffset = 0
+
+		case key.Matches(msg, keys.Sort):
+			switch m.sortBy {
+			case "last-activity":
+				m.sortBy = "name"
+			case "name":
+				m.sortBy = "activity"
+			default:
+				m.sortBy = "last-activity"
+			}
+			m.sortSessions(m.sessions)
+
+		case key.Matches(msg, keys.Search):
+			m.searchMode = true
 		}
 	}
 
 	return m, nil
+}
+
+var activityFilterOrder = []ActivityKind{
+	"",
+	ActivityIdle,
+	ActivityWaiting,
+	ActivityThinking,
+	ActivityReading,
+	ActivityWriting,
+	ActivityRunning,
+	ActivitySearching,
+	ActivityBrowsing,
+	ActivitySpawning,
+}
+
+func nextActivityFilter(current ActivityKind) ActivityKind {
+	for i, k := range activityFilterOrder {
+		if k == current {
+			return activityFilterOrder[(i+1)%len(activityFilterOrder)]
+		}
+	}
+	return ""
 }
 
 // visibleSessions returns sessions modified within the time window, excluding sidechains.
@@ -244,9 +345,17 @@ func (m Model) visibleSessions() []*claude.Session {
 	cutoff := time.Now().Add(-time.Duration(m.windowMinutes) * time.Minute)
 	var out []*claude.Session
 	for _, s := range m.sessions {
-		if !s.IsSidechain && s.LastActivity.After(cutoff) {
-			out = append(out, s)
+		if s.IsSidechain || !s.LastActivity.After(cutoff) {
+			continue
 		}
+		if m.activityFilter != "" && m.activityFor(s.SessionID) != m.activityFilter {
+			continue
+		}
+		if m.searchQuery != "" &&
+			!strings.Contains(strings.ToLower(s.CWD), strings.ToLower(m.searchQuery)) {
+			continue
+		}
+		out = append(out, s)
 	}
 	return out
 }
@@ -384,8 +493,18 @@ func (m Model) renderList(listW int) string {
 		nameW = 4
 	}
 
-	header := lipgloss.NewStyle().Foreground(colorSubtext).Bold(true).
-		Render(fmt.Sprintf("%-*s %s", nameW, "PROJECT", "STATUS"))
+	var header string
+	if m.searchMode {
+		header = lipgloss.NewStyle().Foreground(colorWarning).Bold(true).
+			Render("/ " + m.searchQuery + "█")
+	} else {
+		projectLabel := "PROJECT"
+		if m.activityFilter != "" {
+			projectLabel += " [" + string(m.activityFilter) + "]"
+		}
+		header = lipgloss.NewStyle().Foreground(colorSubtext).Bold(true).
+			Render(fmt.Sprintf("%-*s %s", nameW, projectLabel, "STATUS"))
+	}
 	divider := lipgloss.NewStyle().Foreground(colorBorder).
 		Render(strings.Repeat("─", listW))
 
@@ -516,6 +635,12 @@ func (m Model) buildDetailLines(s *claude.Session, width int) []string {
 		s.TotalMessages, s.UserMessages, s.AssistantMessages)))
 	add(row("Last activity", formatDuration(time.Since(s.LastActivity))))
 
+	if s.LastFileWrite != "" {
+		filePart := shortName(s.LastFileWrite, width-22)
+		agePart := " (" + formatDuration(time.Since(s.LastFileWriteAt)) + ")"
+		add(row("Last file", filePart+lipgloss.NewStyle().Foreground(colorMuted).Render(agePart)))
+	}
+
 	if len(s.RecentTools) > 0 {
 		add("")
 		add(lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", width-2)))
@@ -533,6 +658,32 @@ func (m Model) buildDetailLines(s *claude.Session, width int) []string {
 		}
 	}
 
+	if len(s.RecentMessages) > 0 {
+		add("")
+		add(lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", width-2)))
+		add(lipgloss.NewStyle().Foreground(colorSubtext).Bold(true).Render("Conversation"))
+		add("")
+		msgs := s.RecentMessages
+		if len(msgs) > 5 {
+			msgs = msgs[len(msgs)-5:]
+		}
+		msgW := width - 8
+		if msgW < 4 {
+			msgW = 4
+		}
+		for _, msg := range msgs {
+			role := padRight(msg.Role, 4)
+			text := msg.Text
+			// Collapse newlines for single-line display
+			text = strings.ReplaceAll(text, "\n", " ")
+			if len(text) > msgW {
+				text = text[:msgW]
+			}
+			add(lipgloss.NewStyle().Foreground(colorSubtext).Render("  "+role+"  ") +
+				lipgloss.NewStyle().Foreground(colorText).Render(text))
+		}
+	}
+
 	return lines
 }
 
@@ -540,12 +691,28 @@ func (m Model) buildDetailLines(s *claude.Session, width int) []string {
 
 func (m Model) renderHelp() string {
 	var parts []string
+	if m.searchMode {
+		parts = []string{
+			helpKeyStyle.Render("esc") + helpStyle.Render(" clear"),
+			helpKeyStyle.Render("backspace") + helpStyle.Render(" del"),
+		}
+		return helpStyle.Width(m.width).Render(strings.Join(parts, "  "))
+	}
+
+	filterLabel := "all"
+	if m.activityFilter != "" {
+		filterLabel = string(m.activityFilter)
+	}
+
 	if m.focus == 0 {
 		parts = []string{
 			helpKeyStyle.Render("k/↑") + helpStyle.Render(" prev"),
 			helpKeyStyle.Render("j/↓") + helpStyle.Render(" next"),
 			helpKeyStyle.Render("tab") + helpStyle.Render(" detail"),
 			helpKeyStyle.Render("+/-") + helpStyle.Render(" time window"),
+			helpKeyStyle.Render("f") + helpStyle.Render(" filter:" + filterLabel),
+			helpKeyStyle.Render("s") + helpStyle.Render(" sort:" + m.sortBy),
+			helpKeyStyle.Render("/") + helpStyle.Render(" search"),
 			helpKeyStyle.Render("r") + helpStyle.Render(" refresh"),
 			helpKeyStyle.Render("q") + helpStyle.Render(" quit"),
 		}
@@ -555,6 +722,9 @@ func (m Model) renderHelp() string {
 			helpKeyStyle.Render("j/↓") + helpStyle.Render(" scroll dn"),
 			helpKeyStyle.Render("tab") + helpStyle.Render(" list"),
 			helpKeyStyle.Render("+/-") + helpStyle.Render(" time window"),
+			helpKeyStyle.Render("f") + helpStyle.Render(" filter:" + filterLabel),
+			helpKeyStyle.Render("s") + helpStyle.Render(" sort:" + m.sortBy),
+			helpKeyStyle.Render("/") + helpStyle.Render(" search"),
 			helpKeyStyle.Render("r") + helpStyle.Render(" refresh"),
 			helpKeyStyle.Render("q") + helpStyle.Render(" quit"),
 		}
