@@ -446,11 +446,13 @@ func (m Model) buildDetailLines(s *claude.Session, width int) []string {
 		add(lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", width-2)))
 		add(lipgloss.NewStyle().Foreground(colorSubtext).Bold(true).Render("Recent Tools"))
 		add("")
-		start := 0
-		if len(s.RecentTools) > 20 {
-			start = len(s.RecentTools) - 20
+		// Most recent first
+		tools := s.RecentTools
+		if len(tools) > 20 {
+			tools = tools[len(tools)-20:]
 		}
-		for _, tc := range s.RecentTools[start:] {
+		for i := len(tools) - 1; i >= 0; i-- {
+			tc := tools[i]
 			ago := formatDuration(time.Since(tc.Timestamp))
 			add(lipgloss.NewStyle().Foreground(colorPrimary).Render("  "+tc.Name) +
 				lipgloss.NewStyle().Foreground(colorMuted).Render("  "+ago))

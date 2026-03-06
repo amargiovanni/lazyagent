@@ -17,31 +17,39 @@ type ProcessInfo struct {
 	IsDangerous bool
 }
 
-// FindClaudeProcesses returns all running `claude` processes on macOS.
+// FindClaudeProcesses returns all running Claude Code processes on macOS.
+// Uses pgrep -lf to avoid issues with ps aliases and spaces in paths.
 func FindClaudeProcesses() ([]ProcessInfo, error) {
-	out, err := exec.Command("ps", "aux").Output()
+	out, err := exec.Command("pgrep", "-lf", "claude").Output()
 	if err != nil {
-		return nil, err
+		// exit code 1 means no matches — not an error
+		return nil, nil
 	}
 
+	selfPID := os.Getpid()
 	var procs []ProcessInfo
-	for _, line := range strings.Split(string(out), "\n") {
-		if !strings.Contains(line, "claude") {
-			continue
-		}
-		// Filter: must look like a Claude Code process
-		if !isClaudioLine(line) {
+
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
 			continue
 		}
 		fields := strings.Fields(line)
-		if len(fields) < 11 {
+		if len(fields) < 2 {
 			continue
 		}
-		pid, err := strconv.Atoi(fields[1])
+		pid, err := strconv.Atoi(fields[0])
 		if err != nil {
 			continue
 		}
-		args := strings.Join(fields[10:], " ")
+		if pid == selfPID {
+			continue
+		}
+		// fields[1] is the executable path (or bare name).
+		// Only match actual claude binaries, not wrappers (disclaimer, ShipIt, etc.)
+		if filepath.Base(fields[1]) != "claude" {
+			continue
+		}
+		args := strings.Join(fields[1:], " ")
 		cwd := getCWD(pid)
 		procs = append(procs, ProcessInfo{
 			PID:         pid,
@@ -53,14 +61,11 @@ func FindClaudeProcesses() ([]ProcessInfo, error) {
 	return procs, nil
 }
 
-func isClaudioLine(line string) bool {
-	// Match: node .../claude/... or just the claude binary
-	return strings.Contains(line, "/claude") && !strings.Contains(line, "grep") && !strings.Contains(line, "lazyclaude")
-}
-
 // getCWD returns the current working directory of a process via lsof.
+// The -a flag is required to AND the filters (-p AND -d cwd), otherwise lsof
+// returns all files for all processes matching any criterion.
 func getCWD(pid int) string {
-	out, err := exec.Command("lsof", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn").Output()
+	out, err := exec.Command("lsof", "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn").Output()
 	if err != nil {
 		return ""
 	}
