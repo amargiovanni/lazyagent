@@ -9,7 +9,6 @@ import (
 
 	"github.com/nahime0/lazyagent/internal/assets"
 	"github.com/wailsapp/wails/v3/pkg/application"
-	"github.com/wailsapp/wails/v3/pkg/icons"
 )
 
 // Available reports whether tray support was compiled in.
@@ -42,7 +41,7 @@ func Run() error {
 
 	// System tray
 	tray := app.SystemTray.New()
-	tray.SetTemplateIcon(icons.SystrayMacTemplate)
+	tray.SetTemplateIcon(trayIcon)
 	tray.SetTooltip("lazyagent")
 
 	// Panel window attached to tray
