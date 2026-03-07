@@ -11,7 +11,7 @@
   } from "./lib/stores";
   import SessionList from "./lib/SessionList.svelte";
   import SessionDetail from "./lib/SessionDetail.svelte";
-  import * as SessionService from "./bindings/github.com/nahime0/lazyagent/cmd/app/sessionservice";
+  import * as SessionService from "./bindings/github.com/nahime0/lazyagent/internal/tray/sessionservice";
   import { Events } from "@wailsio/runtime";
 
   let showDetail = $derived($selectedId !== null);

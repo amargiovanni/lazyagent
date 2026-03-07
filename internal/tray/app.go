@@ -1,7 +1,9 @@
-package main
+//go:build !notray
+
+package tray
 
 import (
-	"log"
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -10,7 +12,15 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/icons"
 )
 
-func main() {
+// Available reports whether tray support was compiled in.
+func Available() bool { return true }
+
+// Run starts the macOS menu bar app with system tray.
+func Run() error {
+	if !assets.HasFrontend() {
+		return fmt.Errorf("frontend assets not found — run 'make build' to include the menu bar app")
+	}
+
 	svc := &SessionService{}
 
 	app := application.New(application.Options{
@@ -75,7 +85,5 @@ func main() {
 	})
 	tray.SetMenu(menu)
 
-	if err := app.Run(); err != nil {
-		log.Fatal(err)
-	}
+	return app.Run()
 }

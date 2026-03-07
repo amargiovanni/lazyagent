@@ -1,4 +1,6 @@
-package main
+//go:build !notray
+
+package tray
 
 import (
 	"context"

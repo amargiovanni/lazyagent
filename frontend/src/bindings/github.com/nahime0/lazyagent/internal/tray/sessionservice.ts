@@ -12,7 +12,7 @@ import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Cr
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as core$0 from "../../internal/core/models.js";
+import * as core$0 from "../core/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -22,14 +22,14 @@ import * as $models from "./models.js";
  * GetActiveCount returns the number of sessions with active work.
  */
 export function GetActiveCount(): $CancellablePromise<number> {
-    return $Call.ByID(147928324);
+    return $Call.ByID(4081026139);
 }
 
 /**
  * GetConfig returns the current config.
  */
 export function GetConfig(): $CancellablePromise<core$0.Config> {
-    return $Call.ByID(1166205385).then(($result: any) => {
+    return $Call.ByID(3325798956).then(($result: any) => {
         return $$createType0($result);
     });
 }
@@ -38,7 +38,7 @@ export function GetConfig(): $CancellablePromise<core$0.Config> {
  * GetSessionDetail returns full detail for a session.
  */
 export function GetSessionDetail(id: string): $CancellablePromise<$models.SessionFull | null> {
-    return $Call.ByID(3921151444, id).then(($result: any) => {
+    return $Call.ByID(3865970311, id).then(($result: any) => {
         return $$createType2($result);
     });
 }
@@ -47,7 +47,7 @@ export function GetSessionDetail(id: string): $CancellablePromise<$models.Sessio
  * GetSessions returns all visible sessions for the list view.
  */
 export function GetSessions(): $CancellablePromise<$models.SessionItem[]> {
-    return $Call.ByID(474068578).then(($result: any) => {
+    return $Call.ByID(2715330479).then(($result: any) => {
         return $$createType4($result);
     });
 }
@@ -56,35 +56,35 @@ export function GetSessions(): $CancellablePromise<$models.SessionItem[]> {
  * GetWindowMinutes returns the current time window in minutes.
  */
 export function GetWindowMinutes(): $CancellablePromise<number> {
-    return $Call.ByID(2478459800);
+    return $Call.ByID(623328891);
 }
 
 /**
  * OpenInEditor opens a directory in the user's editor.
  */
 export function OpenInEditor(cwd: string): $CancellablePromise<void> {
-    return $Call.ByID(1075961887, cwd);
+    return $Call.ByID(1983870972, cwd);
 }
 
 /**
  * SetActivityFilter sets the activity filter.
  */
 export function SetActivityFilter(f: string): $CancellablePromise<void> {
-    return $Call.ByID(2685849448, f);
+    return $Call.ByID(3340685613, f);
 }
 
 /**
  * SetSearchQuery sets the search query.
  */
 export function SetSearchQuery(q: string): $CancellablePromise<void> {
-    return $Call.ByID(2127677093, q);
+    return $Call.ByID(2439661330, q);
 }
 
 /**
  * SetWindowMinutes updates the time window.
  */
 export function SetWindowMinutes(m: number): $CancellablePromise<void> {
-    return $Call.ByID(3044962628, m);
+    return $Call.ByID(2220190495, m);
 }
 
 // Private type creation functions
