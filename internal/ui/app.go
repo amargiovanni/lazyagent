@@ -348,7 +348,7 @@ func (m *Model) handleMouse(msg tea.MouseMsg) {
 		}
 
 	case tea.MouseButtonLeft:
-		if msg.Action != tea.MouseActionPress {
+		if msg.Action == tea.MouseActionMotion {
 			return
 		}
 		if msg.Y < contentTop || msg.Y > contentBot {
@@ -360,11 +360,11 @@ func (m *Model) handleMouse(msg tea.MouseMsg) {
 			m.focus = 0
 
 			// Calculate which row was clicked.
-			// Inside the panel: row 0 = top border, row 1 = header, row 2 = divider,
-			// rows 3+ = session items.
+			// Inside the panel: row 0 = header, row 1 = divider,
+			// rows 2+ = session items.
 			rowInPanel := msg.Y - contentTop
-			// Subtract border (1), header (1), divider (1) = 3 rows before items.
-			itemRow := rowInPanel - 3
+			// Subtract header (1) + divider (1) = 2 rows before items.
+			itemRow := rowInPanel - 2
 			if itemRow < 0 {
 				return
 			}
