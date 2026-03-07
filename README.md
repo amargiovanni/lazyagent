@@ -3,9 +3,11 @@
 ![GitHub Downloads](https://img.shields.io/github/downloads/illegalstudio/lazyagent/total)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 
-A terminal UI for monitoring all running [Claude Code](https://claude.ai/code) instances on your machine — inspired by [lazygit](https://github.com/jesseduffield/lazygit), [lazyworktree](https://github.com/chmouel/lazyworktree) and [pixel-agents](https://github.com/pablodelucca/pixel-agents).
+A terminal UI and macOS menu bar app for monitoring all running [Claude Code](https://claude.ai/code) instances on your machine — inspired by [lazygit](https://github.com/jesseduffield/lazygit), [lazyworktree](https://github.com/chmouel/lazyworktree) and [pixel-agents](https://github.com/pablodelucca/pixel-agents).
 
-![lazyagent](assets/screenshot.jpg)
+![lazyagent TUI](assets/screenshot.png)
+
+![lazyagent macOS tray](assets/tray.png)
 
 ## How it works
 
@@ -37,16 +39,30 @@ It also surfaces:
 | Last 20 tools used | JSONL |
 | Last activity timestamp | JSONL |
 
+## Two interfaces, one binary
+
+lazyagent ships as a single binary with two interfaces:
+
+| | TUI | macOS Menu Bar |
+|---|---|---|
+| Interface | Terminal (bubbletea) | Native menu bar panel (Wails v3 + Svelte 5) |
+| Launch | `lazyagent` | `lazyagent --tray` |
+| Dock icon | N/A | Hidden (accessory) |
+| Sparkline | Unicode braille characters | SVG area chart |
+| Theme | Terminal colors | Catppuccin Mocha (Tailwind 4) |
+
+Both share `internal/core/` — session discovery, file watcher, activity state machine, cost estimation, and config. You can run both simultaneously with `lazyagent --tui --tray`.
+
 ## Install
 
-### Homebrew
+### Homebrew (TUI)
 
 ```bash
 brew tap illegalstudio/tap
 brew install lazyagent
 ```
 
-### Go
+### Go (TUI only)
 
 ```bash
 go install github.com/nahime0/lazyagent@latest
@@ -57,7 +73,13 @@ go install github.com/nahime0/lazyagent@latest
 ```bash
 git clone https://github.com/nahime0/lazyagent
 cd lazyagent
-go build -o lazyagent .
+
+# TUI only (no Wails/Node.js needed)
+make tui
+
+# Full build with menu bar app (requires Node.js for frontend)
+make install   # npm install (first time only)
+make build
 ```
 
 ### macOS note
@@ -67,10 +89,16 @@ On first launch, macOS may block the binary. Go to **System Settings → Privacy
 ## Usage
 
 ```
-lazyagent
+lazyagent                Launch the terminal UI
+lazyagent --tui          Launch the terminal UI (explicit)
+lazyagent --tray         Launch as macOS menu bar app (detaches automatically)
+lazyagent --tui --tray   Launch both TUI and tray app
+lazyagent --help         Show help
 ```
 
-### Keybindings
+### TUI
+
+#### Keybindings
 
 | Key | Action |
 |-----|--------|
@@ -84,13 +112,39 @@ lazyagent
 | `r` | Force refresh |
 | `q` / `ctrl+c` | Quit |
 
+### macOS Menu Bar App
+
+```
+lazyagent --tray
+```
+
+The tray process detaches automatically — your terminal returns immediately. The app lives in your menu bar with no Dock icon. Click the tray icon to toggle the panel.
+
+#### Keybindings
+
+| Key | Action |
+|-----|--------|
+| `↑` / `k` | Move up |
+| `↓` / `j` | Move down |
+| `+` / `-` | Adjust time window (±10 minutes) |
+| `f` | Cycle activity filter |
+| `/` | Search sessions |
+| `r` | Force refresh |
+| `esc` | Close detail / dismiss search |
+
+#### Right-click menu
+
+- **Show Panel** — open the session panel
+- **Refresh Now** — force reload all sessions
+- **Quit** — exit the app
+
 ### Editor support
 
-Pressing `o` opens the selected session's working directory in your editor.
+Pressing `o` (TUI) or the **Open** button (app) opens the selected session's working directory in your editor.
 
 | Configuration | Behavior |
 |---------------|----------|
-| Both `$VISUAL` and `$EDITOR` set | A picker popup asks which one to use |
+| Both `$VISUAL` and `$EDITOR` set | A picker popup asks which one to use (TUI only) |
 | Only `$VISUAL` set | Opens directly as GUI editor |
 | Only `$EDITOR` set | Opens directly as TUI editor (suspends the TUI) |
 | Neither set | Shows a hint to configure them |
@@ -100,6 +154,75 @@ Pressing `o` opens the selected session's working directory in your editor.
 export VISUAL="code"   # GUI editor (VS Code, Cursor, Zed, …)
 export EDITOR="nvim"   # TUI editor (vim, nvim, nano, …)
 ```
+
+## Configuration
+
+lazyagent reads `~/.config/lazyagent/config.json` (created automatically with defaults on first run):
+
+```json
+{
+  "windowMinutes": 30,
+  "defaultFilter": "",
+  "editor": "",
+  "launchAtLogin": false,
+  "notifications": false,
+  "notifyAfterSec": 30
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `windowMinutes` | `30` | Time window for session visibility (minutes) |
+| `defaultFilter` | `""` | Default activity filter (empty = show all) |
+| `editor` | `""` | Override for `$VISUAL`/`$EDITOR` |
+| `launchAtLogin` | `false` | Auto-start the menu bar app at login |
+| `notifications` | `false` | macOS notifications when a session needs input |
+| `notifyAfterSec` | `30` | Seconds before triggering a "waiting" notification |
+
+## Architecture
+
+```
+lazyagent/
+├── main.go                     # Entry point: dispatches --tui / --tray / both
+├── internal/
+│   ├── core/                   # Shared: watcher, activity, session, config, helpers
+│   ├── claude/                 # JSONL parsing, types, session discovery
+│   ├── ui/                     # TUI rendering (bubbletea + lipgloss)
+│   ├── tray/                   # macOS menu bar app (Wails v3, build-tagged)
+│   └── assets/                 # Embedded frontend dist (go:embed)
+├── frontend/                   # Svelte 5 + Tailwind 4 (menu bar app UI)
+│   ├── src/
+│   │   ├── App.svelte
+│   │   ├── lib/                # SessionList, SessionDetail, Sparkline, ActivityBadge
+│   │   └── bindings/           # Auto-generated Wails TypeScript bindings
+│   └── app.css                 # Tailwind 4 @theme (Catppuccin Mocha)
+└── Makefile
+```
+
+## Development
+
+```bash
+# Install frontend deps (first time)
+make install
+
+# Full build (TUI + tray)
+make build
+
+# Build TUI only (no Wails/Node.js needed)
+make tui
+
+# Quick dev cycle (rebuild + run tray)
+make dev
+
+# Clean all artifacts
+make clean
+```
+
+### Requirements
+
+- Go 1.25+
+- Node.js 18+ (for frontend build)
+- macOS (for the menu bar app — TUI works on any platform)
 
 ## Roadmap
 
@@ -111,7 +234,7 @@ export EDITOR="nvim"   # TUI editor (vim, nvim, nano, …)
 - [x] FSEvents-based file watcher with debouncing
 - [x] Fallback 30s polling
 
-### v0.2 — Richer session info (current)
+### v0.2 — Richer session info
 - [x] Conversation preview in detail panel (last 5 messages, User/AI labels)
 - [x] Last file written with age
 - [x] Filter sessions by activity type
@@ -122,29 +245,28 @@ export EDITOR="nvim"   # TUI editor (vim, nvim, nano, …)
 - [x] Activity sparkline graph in session list
 - [x] Token usage and cost estimation in detail panel
 - [x] Animated braille spinner for active sessions
-- [x] `o` key to open session CWD in editor (GUI via `$VISUAL`, TUI via `$EDITOR`, picker when both set)
+- [x] `o` key to open session CWD in editor
 - [ ] Display file diff for last written file
 
-### v0.3 — HTTP API
-- [ ] Embedded HTTP server (`--api` flag)
-- [ ] `GET /sessions` — JSON list of all sessions
-- [ ] `GET /sessions/:id` — Full session detail
-- [ ] `GET /sessions/:id/events` — SSE stream of status changes
-- [ ] Authentication token support
-
-### v0.4 — Hooks & Webhooks
-- [ ] Claude Code hook integration (read hook output files)
-- [ ] Outbound webhooks on status changes (e.g. waiting → send Slack notification)
-- [ ] Configurable via `~/.config/lazyagent/config.yaml`
-- [ ] Webhook payload format (session ID, status, project, timestamp)
-
-### v0.5 — Notifications & integrations
-- [ ] macOS native notifications when session needs input
-- [ ] Linear issue linking (detect issue refs in conversation)
-- [ ] Desktop menu bar icon (systray) showing active session count
-- [ ] `lazyagent notify` CLI mode (run headless, only notify)
+### v0.3 — macOS menu bar app
+- [x] Core library extraction (`internal/core/`)
+- [x] Shared config system (`~/.config/lazyagent/config.json`)
+- [x] Wails v3 + Svelte 5 + Tailwind 4 frontend
+- [x] System tray with attached panel (frameless, translucent, floating)
+- [x] Real-time session updates via FSEvents + event push
+- [x] SVG sparkline, activity badges, conversation preview
+- [x] Keyboard shortcuts (j/k, /, f, +/-, r, esc)
+- [x] Open in editor from detail panel
+- [ ] Dynamic tray icon (active session count)
+- [ ] macOS notifications when session needs input
+- [ ] Launch at Login
+- [ ] Code signing & notarization
+- [ ] DMG distribution
+- [ ] Homebrew cask
 
 ### Future ideas
+- [ ] HTTP API with SSE streaming
+- [ ] Outbound webhooks on status changes
 - [ ] Multi-machine support via shared config / remote API
 - [ ] TUI actions: kill session, attach terminal
 - [ ] Session history browser (browse past conversations)
