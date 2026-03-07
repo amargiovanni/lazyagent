@@ -30,6 +30,8 @@ It also surfaces:
 | Is git worktree | git rev-parse |
 | Main repo path (if worktree) | git worktree |
 | Message count (user/assistant) | JSONL |
+| Token usage & estimated cost | JSONL |
+| Activity sparkline (last N minutes) | JSONL |
 | Last file written | JSONL |
 | Recent conversation (last 5 messages) | JSONL |
 | Last 20 tools used | JSONL |
@@ -78,8 +80,26 @@ lazyagent
 | `+` / `-` | Adjust time window (±10 minutes) |
 | `f` | Cycle activity filter |
 | `/` | Search sessions by project path |
+| `o` | Open session CWD in editor (see below) |
 | `r` | Force refresh |
 | `q` / `ctrl+c` | Quit |
+
+### Editor support
+
+Pressing `o` opens the selected session's working directory in your editor.
+
+| Configuration | Behavior |
+|---------------|----------|
+| Both `$VISUAL` and `$EDITOR` set | A picker popup asks which one to use |
+| Only `$VISUAL` set | Opens directly as GUI editor |
+| Only `$EDITOR` set | Opens directly as TUI editor (suspends the TUI) |
+| Neither set | Shows a hint to configure them |
+
+```bash
+# Example: add to ~/.zshrc or ~/.bashrc
+export VISUAL="code"   # GUI editor (VS Code, Cursor, Zed, …)
+export EDITOR="nvim"   # TUI editor (vim, nvim, nano, …)
+```
 
 ## Roadmap
 
@@ -99,6 +119,10 @@ lazyagent
 - [x] Time window control (show last N minutes)
 - [x] Color-coded activity states with grace periods
 - [x] Memory-efficient single-pass JSONL parsing
+- [x] Activity sparkline graph in session list
+- [x] Token usage and cost estimation in detail panel
+- [x] Animated braille spinner for active sessions
+- [x] `o` key to open session CWD in editor (GUI via `$VISUAL`, TUI via `$EDITOR`, picker when both set)
 - [ ] Display file diff for last written file
 
 ### v0.3 — HTTP API
@@ -122,5 +146,5 @@ lazyagent
 
 ### Future ideas
 - [ ] Multi-machine support via shared config / remote API
-- [ ] TUI actions: open project in editor, kill session, attach terminal
+- [ ] TUI actions: kill session, attach terminal
 - [ ] Session history browser (browse past conversations)
